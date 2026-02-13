@@ -385,6 +385,13 @@ pub(super) unsafe extern "C" fn esp_intr_alloc(
                     interrupt::Priority::Priority1
                 ));
             }
+            12 => {
+                ISR_INTERRUPT_12 = (handler, arg);
+                unwrap!(interrupt::enable(
+                    Interrupt::IEEE802154,
+                    interrupt::Priority::Priority1
+                ));
+            }
             _ => panic!("Unexpected interrupt source {}", source),
         }
     }

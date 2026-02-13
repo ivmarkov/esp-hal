@@ -100,3 +100,28 @@ extern "C" fn BT_MAC() {
         trace!("interrupt BT_MAC done");
     };
 }
+
+pub(crate) static mut ISR_INTERRUPT_12: (*mut c_void, *mut c_void) =
+    (core::ptr::null_mut(), core::ptr::null_mut());
+
+// TODO XXX FIXME #[cfg(feature = "ble")]
+#[unsafe(no_mangle)]
+extern "C" fn IEEE802154() {
+    unsafe {
+        trace!("IEEE802154 interrupt");
+
+        let (fnc, arg) = crate::ble::npl::ble_os_adapter_chip_specific::ISR_INTERRUPT_12;
+
+        trace!("interrupt IEEE802154 {:?} {:?}", fnc, arg);
+
+        if !fnc.is_null() {
+            trace!("interrupt IEEE802154 call");
+
+            let fnc: fn(*mut sys::c_types::c_void) = core::mem::transmute(fnc);
+            fnc(arg);
+            trace!("IEEE802154 done");
+        }
+
+        trace!("interrupt IEEE802154 done");
+    };
+}
