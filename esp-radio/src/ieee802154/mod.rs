@@ -210,7 +210,10 @@ impl<'a> Ieee802154<'a> {
     }
 
     /// Transmit a frame
-    pub fn transmit(&mut self, frame: &Frame) -> Result<(), Error> {
+    ///
+    /// If `cca` is true, a Clear Channel Assessment is performed before
+    /// transmitting. The transmission is aborted if the channel is busy.
+    pub fn transmit(&mut self, frame: &Frame, cca: bool) -> Result<(), Error> {
         let frm = mac::Frame {
             header: frame.header,
             content: frame.content,
@@ -228,17 +231,20 @@ impl<'a> Ieee802154<'a> {
             .unwrap();
         self.transmit_buffer[0] = (offset - 1) as u8;
 
-        ieee802154_transmit(self.transmit_buffer.as_ptr(), false); // what about CCA?
+        ieee802154_transmit(self.transmit_buffer.as_ptr(), cca);
 
         Ok(())
     }
 
     /// Transmit a raw frame
-    pub fn transmit_raw(&mut self, frame: &[u8]) -> Result<(), Error> {
+    ///
+    /// If `cca` is true, a Clear Channel Assessment is performed before
+    /// transmitting. The transmission is aborted if the channel is busy.
+    pub fn transmit_raw(&mut self, frame: &[u8], cca: bool) -> Result<(), Error> {
         self.transmit_buffer[1..][..frame.len()].copy_from_slice(frame);
         self.transmit_buffer[0] = frame.len() as u8;
 
-        ieee802154_transmit(self.transmit_buffer.as_ptr(), false); // what about CCA?
+        ieee802154_transmit(self.transmit_buffer.as_ptr(), cca);
 
         Ok(())
     }
