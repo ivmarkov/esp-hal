@@ -55,6 +55,8 @@ unsafe extern "C" {
     fn esp_coex_ieee802154_ack_pti_set(event: ieee802154_coex_event_t); // from ???
 
     fn esp_coex_ieee802154_txrx_pti_set(event: ieee802154_coex_event_t); // from ???
+
+    fn esp_coex_ieee802154_coex_break_notify(); // from coex lib
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -126,25 +128,13 @@ fn ieee802154_mac_init() {
 
     enable_tx_abort_events(
         TxAbortReason::RxAckTimeout
-            | TxAbortReason::RxAckSfdTimeout
-            | TxAbortReason::RxAckCrcError
-            | TxAbortReason::RxAckInvalidLen
-            | TxAbortReason::RxAckFilterFail
-            | TxAbortReason::RxAckNoRss
-            | TxAbortReason::RxAckCoexBreak
-            | TxAbortReason::RxAckTypeNotAck
-            | TxAbortReason::RxAckRestart
             | TxAbortReason::TxCoexBreak
             | TxAbortReason::TxSecurityError
             | TxAbortReason::CcaFailed
-            | TxAbortReason::CcaBusy
-            | TxAbortReason::TxStop,
+            | TxAbortReason::CcaBusy,
     );
     enable_rx_abort_events(
-        RxAbortReason::TxAckTimeout
-            | RxAbortReason::TxAckCoexBreak
-            | RxAbortReason::RxStop
-            | RxAbortReason::TxAckStop,
+        RxAbortReason::TxAckTimeout | RxAbortReason::TxAckCoexBreak,
     );
 
     set_ed_sample_mode(EdSampleMode::Avg);
@@ -752,8 +742,9 @@ fn isr_handle_tx_abort(tx_abort_reason: u32, needs_next_op: &mut bool) {
             super::tx_failed();
             *needs_next_op = true;
         }
-        // TX coex break
+        // TX coex break - notify coex manager
         r if r == TxAbortReason::TxCoexBreak as u32 => {
+            unsafe { esp_coex_ieee802154_coex_break_notify() };
             super::tx_failed();
             *needs_next_op = true;
         }
