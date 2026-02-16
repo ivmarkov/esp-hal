@@ -302,7 +302,7 @@ impl<'a> Ieee802154<'a> {
         CALLBACKS.with(|cbs| cbs.tx_failed = None);
     }
 
-    /// Set the transmit failed callback function.
+    /// Set the transmit failed callback function pointer.
     pub fn set_tx_failed_callback_fn(&mut self, callback: fn()) {
         CALLBACKS.with(|cbs| cbs.tx_failed_fn = Some(callback));
     }

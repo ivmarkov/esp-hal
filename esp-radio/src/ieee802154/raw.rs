@@ -691,13 +691,13 @@ fn isr_handle_tx_ack_phase_rx_abort(rx_abort_reason: u32, needs_next_op: &mut bo
         r if r == RxAbortReason::TxAckTimeout as u32
             || r == RxAbortReason::TxAckCoexBreak as u32 =>
         {
-            STATE.with(|state| receive_done(state));
+            // Frame was already queued during RX_DONE handling, just notify and proceed
             super::rx_available();
             *needs_next_op = true;
         }
         // Enhanced ACK security error - deliver received frame
         r if r == RxAbortReason::EnhackSecurityError as u32 => {
-            STATE.with(|state| receive_done(state));
+            // Frame was already queued during RX_DONE handling, just notify and proceed
             super::rx_available();
             *needs_next_op = true;
         }
