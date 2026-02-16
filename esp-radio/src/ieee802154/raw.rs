@@ -133,9 +133,7 @@ fn ieee802154_mac_init() {
             | TxAbortReason::CcaFailed
             | TxAbortReason::CcaBusy,
     );
-    enable_rx_abort_events(
-        RxAbortReason::TxAckTimeout | RxAbortReason::TxAckCoexBreak,
-    );
+    enable_rx_abort_events(RxAbortReason::TxAckTimeout | RxAbortReason::TxAckCoexBreak);
 
     set_ed_sample_mode(EdSampleMode::Avg);
 
