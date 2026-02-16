@@ -276,7 +276,7 @@ fn stop_current_operation_inner(state: &mut IeeeState) {
             stop_tx(state);
         }
         Ieee802154State::RxAck => {
-            stop_rx_ack(state);
+            stop_rx_ack();
         }
     }
 }
@@ -324,7 +324,7 @@ fn stop_tx(state: &mut IeeeState) {
     clear_events(Event::TxDone | Event::TxAbort | Event::TxSfdDone);
 }
 
-fn stop_rx_ack(state: &mut IeeeState) {
+fn stop_rx_ack() {
     set_cmd(Command::Stop);
 
     let evts = events();
