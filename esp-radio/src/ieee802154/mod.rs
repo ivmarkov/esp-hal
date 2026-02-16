@@ -288,6 +288,29 @@ impl<'a> Ieee802154<'a> {
     pub fn clear_rx_available_callback_fn(&mut self) {
         CALLBACKS.with(|cbs| cbs.rx_available_fn = None);
     }
+
+    /// Set the transmit failed callback function.
+    pub fn set_tx_failed_callback(&mut self, callback: &'a mut (dyn FnMut() + Send)) {
+        CALLBACKS.with(|cbs| {
+            let cb: &'static mut (dyn FnMut() + Send) = unsafe { core::mem::transmute(callback) };
+            cbs.tx_failed = Some(cb);
+        });
+    }
+
+    /// Clear the transmit failed callback function.
+    pub fn clear_tx_failed_callback(&mut self) {
+        CALLBACKS.with(|cbs| cbs.tx_failed = None);
+    }
+
+    /// Set the transmit failed callback function.
+    pub fn set_tx_failed_callback_fn(&mut self, callback: fn()) {
+        CALLBACKS.with(|cbs| cbs.tx_failed_fn = Some(callback));
+    }
+
+    /// Clear the transmit failed callback function.
+    pub fn clear_tx_failed_callback_fn(&mut self) {
+        CALLBACKS.with(|cbs| cbs.tx_failed_fn = None);
+    }
 }
 
 impl Drop for Ieee802154<'_> {
@@ -296,6 +319,8 @@ impl Drop for Ieee802154<'_> {
         self.clear_tx_done_callback_fn();
         self.clear_rx_available_callback();
         self.clear_rx_available_callback_fn();
+        self.clear_tx_failed_callback();
+        self.clear_tx_failed_callback_fn();
     }
 }
 
@@ -318,9 +343,11 @@ pub fn rssi_to_lqi(rssi: i8) -> u8 {
 struct Callbacks {
     tx_done: Option<&'static mut (dyn FnMut() + Send)>,
     rx_available: Option<&'static mut (dyn FnMut() + Send)>,
+    tx_failed: Option<&'static mut (dyn FnMut() + Send)>,
     // TODO: remove these - Box<dyn FnMut> should be good enough
     tx_done_fn: Option<fn()>,
     rx_available_fn: Option<fn()>,
+    tx_failed_fn: Option<fn()>,
 }
 
 impl Callbacks {
@@ -341,19 +368,36 @@ impl Callbacks {
             cb();
         }
     }
+
+    fn call_tx_failed(&mut self) {
+        if let Some(cb) = self.tx_failed.as_mut() {
+            cb();
+        }
+        if let Some(cb) = self.tx_failed_fn.as_mut() {
+            cb();
+        }
+    }
 }
 
 static CALLBACKS: NonReentrantMutex<Callbacks> = NonReentrantMutex::new(Callbacks {
     tx_done: None,
     rx_available: None,
+    tx_failed: None,
     tx_done_fn: None,
     rx_available_fn: None,
+    tx_failed_fn: None,
 });
 
 fn tx_done() {
     trace!("tx_done callback");
 
     CALLBACKS.with(|cbs| cbs.call_tx_done());
+}
+
+fn tx_failed() {
+    trace!("tx_failed callback");
+
+    CALLBACKS.with(|cbs| cbs.call_tx_failed());
 }
 
 fn rx_available() {

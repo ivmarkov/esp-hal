@@ -407,15 +407,62 @@ pub(crate) fn set_rx_addr(addr: *mut u8) {
 }
 
 #[inline(always)]
-pub(crate) fn abort_tx() {
+pub(crate) fn get_tx_abort_reason() -> u32 {
+    IEEE802154::regs()
+        .tx_status()
+        .read()
+        .tx_abort_status()
+        .bits() as u32
+}
+
+#[inline(always)]
+pub(crate) fn get_rx_abort_reason() -> u32 {
+    IEEE802154::regs()
+        .rx_status()
+        .read()
+        .rx_abort_status()
+        .bits() as u32
+}
+
+#[inline(always)]
+pub(crate) fn clear_tx_abort_status() {
     IEEE802154::regs()
         .tx_status()
         .modify(|_, w| unsafe { w.tx_abort_status().bits(0) });
 }
 
 #[inline(always)]
-pub(crate) fn abort_rx() {
+pub(crate) fn clear_rx_abort_status() {
     IEEE802154::regs()
         .rx_status()
         .modify(|_, w| unsafe { w.rx_abort_status().bits(0) });
+}
+
+#[inline(always)]
+pub(crate) fn rx_auto_ack() -> bool {
+    IEEE802154::regs()
+        .ctrl_cfg()
+        .read()
+        .hw_auto_ack_rx_en()
+        .bit_is_set()
+}
+
+#[inline(always)]
+pub(crate) fn disable_tx_abort_events(events: u32) {
+    IEEE802154::regs()
+        .tx_abort_interrupt_control()
+        .modify(|r, w| unsafe {
+            w.tx_abort_interrupt_control()
+                .bits(r.tx_abort_interrupt_control().bits() & !events)
+        });
+}
+
+#[inline(always)]
+pub(crate) fn disable_rx_abort_events(events: u32) {
+    IEEE802154::regs()
+        .rx_abort_intr_ctrl()
+        .modify(|r, w| unsafe {
+            w.rx_abort_intr_ctrl()
+                .bits(r.rx_abort_intr_ctrl().bits() & !events)
+        });
 }
