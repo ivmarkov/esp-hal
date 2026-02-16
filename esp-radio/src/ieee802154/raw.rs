@@ -29,6 +29,10 @@ use crate::sys::include::{
 
 const PHY_ENABLE_VERSION_PRINT: u8 = 1;
 
+/// ACK receive timeout in microseconds (200ms), matching the C driver's
+/// `receive_ack_timeout_timer_start(200000)`.
+const ACK_TIMEOUT_US: u32 = 200_000;
+
 static mut RX_BUFFER: [u8; FRAME_SIZE] = [0u8; FRAME_SIZE];
 
 struct IeeeState {
@@ -565,7 +569,7 @@ fn isr_handle_tx_done(needs_next_op: &mut bool) {
             if frame_is_ack_required(frame_data) && rx_auto_ack() {
                 // Wait for ACK - start 200ms timeout timer matching C driver
                 state.state = Ieee802154State::RxAck;
-                receive_ack_timeout_timer_start(200_000);
+                receive_ack_timeout_timer_start(ACK_TIMEOUT_US);
                 *needs_next_op = false;
             } else {
                 // TX complete, no ACK needed
