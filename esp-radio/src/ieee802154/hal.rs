@@ -450,17 +450,3 @@ pub(crate) fn timer0_start() {
 pub(crate) fn timer0_stop() {
     set_cmd(Command::Timer0Stop);
 }
-
-/// Check if the hardware is currently receiving a frame (past SFD detection).
-/// Matches C driver's `ieee802154_ll_is_current_rx_frame()`.
-const RX_STATUS_RECEIVE_SFD: u8 = 0x1;
-
-#[inline(always)]
-pub(crate) fn is_current_rx_frame() -> bool {
-    IEEE802154::regs()
-        .rx_status()
-        .read()
-        .rx_state()
-        .bits()
-        > RX_STATUS_RECEIVE_SFD
-}
