@@ -183,13 +183,8 @@ fn ieee802154_set_txrx_pti(txrx_scene: Ieee802154TxRxScene) {
     }
 }
 
-pub fn tx_init(frame: *const u8) {
-    // NOTE: this must be called from within STATE.with context
-    // since stop_current_operation_inner needs the state reference.
-    // We use the simple stop here since tx_init is called inside STATE.with.
-    let evts = events();
-    set_cmd(Command::Stop);
-    clear_events(evts);
+fn tx_init(state: &mut IeeeState, frame: *const u8) {
+    stop_current_operation_inner(state);
 
     ieee802154_pib_update();
     ieee802154_sec_update();
@@ -216,7 +211,7 @@ pub fn ieee802154_transmit(frame: *const u8, cca: bool) -> i32 {
     STATE.with(|state| {
         unsafe { TX_FRAME = frame };
 
-        tx_init(frame);
+        tx_init(state, frame);
 
         ieee802154_set_txrx_pti(Ieee802154TxRxScene::Tx);
 
@@ -239,7 +234,7 @@ pub fn ieee802154_receive() -> i32 {
             return;
         }
 
-        rx_init();
+        rx_init(state);
         enable_rx();
 
         state.state = Ieee802154State::Receive;
@@ -252,13 +247,8 @@ pub fn ieee802154_poll() -> Option<RawReceived> {
     STATE.with(|state| state.rx_queue.pop_front())
 }
 
-fn rx_init() {
-    // NOTE: this must be called from within STATE.with context.
-    // We use the simple stop here since rx_init is called inside STATE.with.
-    let evts = events();
-    set_cmd(Command::Stop);
-    clear_events(evts);
-
+fn rx_init(state: &mut IeeeState) {
+    stop_current_operation_inner(state);
     ieee802154_pib_update();
 }
 
@@ -269,12 +259,6 @@ fn enable_rx() {
     set_cmd(Command::RxStart);
 
     // ieee802154_state = IEEE802154_STATE_RX;
-}
-
-fn stop_current_operation() {
-    STATE.with(|state| {
-        stop_current_operation_inner(state);
-    });
 }
 
 fn stop_current_operation_inner(state: &mut IeeeState) {
@@ -634,10 +618,8 @@ fn isr_handle_rx_phase_rx_abort(rx_abort_reason: u32, needs_next_op: &mut bool) 
         // Stop reasons - do nothing
         r if r == RxAbortReason::RxStop as u32
             || r == RxAbortReason::TxAckStop as u32
-            || r == RxAbortReason::EdStop as u32 =>
-        {
-            return;
-        }
+            || r == RxAbortReason::EdStop as u32 => {}
+
         // RX errors while receiving - just need next operation
         r if r == RxAbortReason::SfdTimeout as u32
             || r == RxAbortReason::CrcError as u32
@@ -653,10 +635,8 @@ fn isr_handle_rx_phase_rx_abort(rx_abort_reason: u32, needs_next_op: &mut bool) 
         // TX ACK timeout/coex break/enhack error - handled in phase 2
         r if r == RxAbortReason::TxAckTimeout as u32
             || r == RxAbortReason::TxAckCoexBreak as u32
-            || r == RxAbortReason::EnhackSecurityError as u32 =>
-        {
-            return;
-        }
+            || r == RxAbortReason::EnhackSecurityError as u32 => {}
+
         _ => {
             warn!("Unexpected rx abort reason: {}", rx_abort_reason);
             *needs_next_op = true;
@@ -670,7 +650,7 @@ fn isr_handle_tx_ack_phase_rx_abort(rx_abort_reason: u32, needs_next_op: &mut bo
     ieee802154_sec_update();
 
     match rx_abort_reason {
-        // Most abort reasons during TX_ACK phase - just return
+        // Most abort reasons during TX_ACK phase - do nothing
         r if r == RxAbortReason::TxAckStop as u32
             || r == RxAbortReason::RxStop as u32
             || r == RxAbortReason::EdStop as u32
@@ -683,10 +663,8 @@ fn isr_handle_tx_ack_phase_rx_abort(rx_abort_reason: u32, needs_next_op: &mut bo
             || r == RxAbortReason::RxRestart as u32
             || r == RxAbortReason::CoexBreak as u32
             || r == RxAbortReason::EdAbort as u32
-            || r == RxAbortReason::EdCoexReject as u32 =>
-        {
-            return;
-        }
+            || r == RxAbortReason::EdCoexReject as u32 => {}
+
         // TX ACK timeout or coex break while sending ACK - deliver received frame
         r if r == RxAbortReason::TxAckTimeout as u32
             || r == RxAbortReason::TxAckCoexBreak as u32 =>
