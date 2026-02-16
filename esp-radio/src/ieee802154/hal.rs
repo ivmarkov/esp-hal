@@ -432,3 +432,21 @@ pub(crate) fn rx_auto_ack() -> bool {
         .hw_auto_ack_rx_en()
         .bit_is_set()
 }
+
+#[inline(always)]
+pub(crate) fn timer0_set_threshold(threshold: u32) {
+    IEEE802154::regs()
+        .time(0)
+        .threshold()
+        .write(|w| unsafe { w.timer0_threshold().bits(threshold) });
+}
+
+#[inline(always)]
+pub(crate) fn timer0_start() {
+    set_cmd(Command::Timer0Start);
+}
+
+#[inline(always)]
+pub(crate) fn timer0_stop() {
+    set_cmd(Command::Timer0Stop);
+}

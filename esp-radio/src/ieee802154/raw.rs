@@ -262,6 +262,7 @@ fn enable_rx() {
 }
 
 fn stop_current_operation_inner(state: &mut IeeeState) {
+    event_end_process();
     match state.state {
         Ieee802154State::Idle => {
             set_cmd(Command::Stop);
@@ -329,6 +330,7 @@ fn stop_rx_ack() {
 
     let evts = events();
 
+    timer0_stop();
     disable_events(Event::Timer0Overflow as u16);
 
     if evts & Event::AckRxDone != 0 {
@@ -418,6 +420,14 @@ pub fn set_cca_mode(mode: CcaMode) {
 
 pub fn set_panid(index: u8, id: u16) {
     ieee802154_pib_set_panid(index, id);
+}
+
+/// Stop timers at the start of event processing, matching C driver's event_end_process.
+/// The C driver also clears ETM channels here, which we don't use.
+#[inline(always)]
+fn event_end_process() {
+    timer0_stop();
+    // timer1 is not currently used; would be stopped here if we add timed TX/RX
 }
 
 #[inline(always)]
@@ -530,6 +540,12 @@ fn zb_mac_handler() {
         isr_handle_tx_abort(tx_abort_reason, &mut needs_next_operation);
     }
 
+    if events & Event::Timer0Overflow != 0 {
+        trace!("Timer0Overflow");
+        isr_handle_timer0_done(&mut needs_next_operation);
+        events &= !(Event::Timer0Overflow as u16);
+    }
+
     if needs_next_operation {
         next_operation();
     }
@@ -538,6 +554,7 @@ fn zb_mac_handler() {
 /// Handle TX done in ISR - matches C driver's isr_handle_tx_done
 fn isr_handle_tx_done(needs_next_op: &mut bool) {
     ieee802154_sec_update();
+    event_end_process();
 
     STATE.with(|state| {
         if state.state == Ieee802154State::Transmit {
@@ -546,8 +563,9 @@ fn isr_handle_tx_done(needs_next_op: &mut bool) {
                 unsafe { core::slice::from_raw_parts(tx_frame.add(1), *tx_frame as usize) };
 
             if frame_is_ack_required(frame_data) && rx_auto_ack() {
-                // Wait for ACK
+                // Wait for ACK - start 200ms timeout timer matching C driver
                 state.state = Ieee802154State::RxAck;
+                receive_ack_timeout_timer_start(200_000);
                 *needs_next_op = false;
             } else {
                 // TX complete, no ACK needed
@@ -560,6 +578,7 @@ fn isr_handle_tx_done(needs_next_op: &mut bool) {
 
 /// Handle RX done in ISR - matches C driver's isr_handle_rx_done
 fn isr_handle_rx_done(needs_next_op: &mut bool) {
+    event_end_process();
     unsafe {
         trace!(
             "Received raw {:?}",
@@ -605,6 +624,7 @@ fn isr_handle_ack_tx_done(needs_next_op: &mut bool) {
 
 /// Handle ACK RX done in ISR - matches C driver's isr_handle_ack_rx_done
 fn isr_handle_ack_rx_done(needs_next_op: &mut bool) {
+    timer0_stop();
     disable_events(Event::Timer0Overflow as u16);
     // ACK received for our transmitted frame
     super::tx_done();
@@ -614,6 +634,7 @@ fn isr_handle_ack_rx_done(needs_next_op: &mut bool) {
 /// First phase RX abort - handles aborts while in RX state
 /// Matches C driver's isr_handle_rx_phase_rx_abort
 fn isr_handle_rx_phase_rx_abort(rx_abort_reason: u32, needs_next_op: &mut bool) {
+    event_end_process();
     match rx_abort_reason {
         // Stop reasons - do nothing
         r if r == RxAbortReason::RxStop as u32
@@ -648,6 +669,7 @@ fn isr_handle_rx_phase_rx_abort(rx_abort_reason: u32, needs_next_op: &mut bool) 
 /// Matches C driver's isr_handle_tx_ack_phase_rx_abort
 fn isr_handle_tx_ack_phase_rx_abort(rx_abort_reason: u32, needs_next_op: &mut bool) {
     ieee802154_sec_update();
+    event_end_process();
 
     match rx_abort_reason {
         // Most abort reasons during TX_ACK phase - do nothing
@@ -688,9 +710,18 @@ fn isr_handle_tx_ack_phase_rx_abort(rx_abort_reason: u32, needs_next_op: &mut bo
     }
 }
 
+/// Handle Timer0 overflow (ACK receive timeout) - matches C driver's isr_handle_timer0_done
+/// which calls ieee802154_rx_ack_timeout_callback
+fn isr_handle_timer0_done(needs_next_op: &mut bool) {
+    // Timer0 fired while waiting for ACK - TX failed with no ACK
+    super::tx_failed();
+    *needs_next_op = true;
+}
+
 /// Handle TX abort - matches C driver's isr_handle_tx_abort
 fn isr_handle_tx_abort(tx_abort_reason: u32, needs_next_op: &mut bool) {
     ieee802154_sec_update();
+    event_end_process();
 
     match tx_abort_reason {
         // RX ACK stop or TX stop - do nothing (handled by stop_current_operation)
@@ -712,6 +743,7 @@ fn isr_handle_tx_abort(tx_abort_reason: u32, needs_next_op: &mut bool) {
         }
         // RX ACK timeout - no ACK received
         r if r == TxAbortReason::RxAckTimeout as u32 => {
+            timer0_stop();
             disable_events(Event::Timer0Overflow as u16);
             super::tx_failed();
             *needs_next_op = true;
@@ -752,4 +784,12 @@ fn will_auto_send_ack(frame: &[u8]) -> bool {
 
 fn should_send_enhanced_ack(frame: &[u8]) -> bool {
     frame_is_ack_required(frame) && frame_get_version(frame) <= FRAME_VERSION_2 && tx_enhance_ack()
+}
+
+/// Start the ACK receive timeout timer.
+/// Duration is in microseconds. The C driver uses 200000 (200ms).
+fn receive_ack_timeout_timer_start(duration: u32) {
+    enable_events(Event::Timer0Overflow as u16);
+    timer0_set_threshold(duration);
+    timer0_start();
 }
