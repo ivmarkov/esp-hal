@@ -471,6 +471,12 @@ fn event_end_process() {
 }
 
 fn next_operation_inner(state: &mut IeeeState) {
+    // Set state to Idle before dispatching the next operation.
+    // This prevents stop_current_operation_inner (called from tx_init)
+    // from seeing a stale TxAck state and calling stop_tx_ack, which
+    // would duplicate-queue the already-delivered received frame.
+    state.state = Ieee802154State::Idle;
+
     if let Some(pending) = state.pending_tx.take() {
         // Restore RX abort events to normal (matching C driver's next_operation)
         disable_rx_abort_events(RxAbortReason::all());
@@ -481,9 +487,8 @@ fn next_operation_inner(state: &mut IeeeState) {
     } else if ieee802154_pib_get_rx_when_idle() {
         enable_rx();
         state.state = Ieee802154State::Receive;
-    } else {
-        state.state = Ieee802154State::Idle;
     }
+    // else state stays Idle
 }
 
 fn next_operation() {
@@ -611,9 +616,6 @@ fn isr_handle_rx_done(needs_next_op: &mut bool) {
         );
 
         STATE.with(|state| {
-            // Queue the received frame
-            receive_done(state);
-
             let frm = if RX_BUFFER[0] >= FRAME_SIZE as u8 {
                 warn!("RX_BUFFER[0] {} is larger than frame size", RX_BUFFER[0]);
                 &RX_BUFFER[1..][..FRAME_SIZE - 1]
@@ -623,14 +625,20 @@ fn isr_handle_rx_done(needs_next_op: &mut bool) {
 
             if will_auto_send_ack(frm) {
                 // auto tx ack for frame version 0b00 and 0b01
+                // Don't queue the frame yet - it will be queued when ACK is
+                // sent (isr_handle_ack_tx_done) or ACK fails (phase 2 abort).
+                // This matches the C driver which only calls
+                // ieee802154_receive_done after ACK completion.
                 state.state = Ieee802154State::TxAck;
                 *needs_next_op = false;
             } else if should_send_enhanced_ack(frm) {
                 // Enhanced ACK for frame version 0b10 - TODO: full enh-ack support
+                // Same as above: defer queuing until ACK phase completes.
                 state.state = Ieee802154State::TxEnhAck;
                 *needs_next_op = false;
             } else {
-                // No ACK needed, notify rx_available immediately
+                // No ACK needed, queue and notify immediately
+                receive_done(state);
                 super::rx_available();
                 *needs_next_op = true;
             }
@@ -640,7 +648,10 @@ fn isr_handle_rx_done(needs_next_op: &mut bool) {
 
 /// Handle ACK TX done in ISR - matches C driver's isr_handle_ack_tx_done
 fn isr_handle_ack_tx_done(needs_next_op: &mut bool) {
-    // Notify that the received frame (which triggered the ACK) is available
+    // Queue the received frame (deferred from isr_handle_rx_done) and notify
+    STATE.with(|state| {
+        receive_done(state);
+    });
     super::rx_available();
     *needs_next_op = true;
 }
@@ -720,13 +731,19 @@ fn isr_handle_tx_ack_phase_rx_abort(rx_abort_reason: u32, needs_next_op: &mut bo
         r if r == RxAbortReason::TxAckTimeout as u32
             || r == RxAbortReason::TxAckCoexBreak as u32 =>
         {
-            // Frame was already queued during RX_DONE handling, just notify and proceed
+            // Frame was deferred from isr_handle_rx_done - queue it now
+            STATE.with(|state| {
+                receive_done(state);
+            });
             super::rx_available();
             *needs_next_op = true;
         }
         // Enhanced ACK security error - deliver received frame
         r if r == RxAbortReason::EnhackSecurityError as u32 => {
-            // Frame was already queued during RX_DONE handling, just notify and proceed
+            // Frame was deferred from isr_handle_rx_done - queue it now
+            STATE.with(|state| {
+                receive_done(state);
+            });
             super::rx_available();
             *needs_next_op = true;
         }
