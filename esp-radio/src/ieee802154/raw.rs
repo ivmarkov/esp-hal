@@ -575,7 +575,6 @@ fn zb_mac_handler() {
     if events & Event::Timer0Overflow != 0 {
         trace!("Timer0Overflow");
         isr_handle_timer0_done(&mut needs_next_operation);
-        events &= !(Event::Timer0Overflow as u16);
     }
 
     if needs_next_operation {
