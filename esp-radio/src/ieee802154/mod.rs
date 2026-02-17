@@ -89,7 +89,7 @@ impl Default for Config {
             promiscuous: Default::default(),
             coordinator: Default::default(),
             rx_when_idle: Default::default(),
-            txpower: 10,
+            txpower: 20,
             channel: 15,
             cca_threshold: CONFIG_IEEE802154_CCA_THRESHOLD,
             cca_mode: CcaMode::Ed,
