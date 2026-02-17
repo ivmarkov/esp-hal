@@ -305,7 +305,7 @@ fn stop_current_operation_inner(state: &mut IeeeState) {
             stop_rx(state);
         }
         Ieee802154State::TxAck | Ieee802154State::TxEnhAck => {
-            stop_tx_ack(state);
+            stop_tx_ack();
         }
         Ieee802154State::Transmit => {
             stop_tx(state);
@@ -327,10 +327,11 @@ fn stop_rx(state: &mut IeeeState) {
     clear_events(Event::RxDone | Event::RxAbort | Event::RxSfdDone);
 }
 
-fn stop_tx_ack(state: &mut IeeeState) {
+fn stop_tx_ack() {
     set_cmd(Command::Stop);
 
-    receive_done(state);
+    // Frame was already copied to queue in isr_handle_rx_done.
+    // Don't call receive_done again (that caused the "Receive queue full" bug).
 
     clear_events(Event::AckTxDone | Event::RxAbort | Event::TxSfdDone);
 }
@@ -341,7 +342,7 @@ fn stop_tx(state: &mut IeeeState) {
     let evts = events();
 
     if state.state == Ieee802154State::TxEnhAck {
-        receive_done(state);
+        // Frame was already copied in isr_handle_rx_done, no need to call receive_done
         clear_events(Event::AckTxDone as u16);
     } else if (evts & Event::TxDone != 0)
         && (!frame_is_ack_required(unsafe {
@@ -623,22 +624,25 @@ fn isr_handle_rx_done(needs_next_op: &mut bool) {
                 &RX_BUFFER[1..][..RX_BUFFER[0] as usize]
             };
 
+            // Always copy RX_BUFFER immediately — we only have one buffer,
+            // and the hardware may overwrite it during auto-ACK or later RX.
+            // The C driver can defer because it has multiple RX buffers and
+            // advances the index in isr_handle_rx_done via next_rx_buffer().
+            receive_done(state);
+
             if will_auto_send_ack(frm) {
                 // auto tx ack for frame version 0b00 and 0b01
-                // Don't queue the frame yet - it will be queued when ACK is
-                // sent (isr_handle_ack_tx_done) or ACK fails (phase 2 abort).
-                // This matches the C driver which only calls
-                // ieee802154_receive_done after ACK completion.
+                // Frame data already copied above. Defer rx_available()
+                // notification until ACK completes (isr_handle_ack_tx_done).
                 state.state = Ieee802154State::TxAck;
                 *needs_next_op = false;
             } else if should_send_enhanced_ack(frm) {
                 // Enhanced ACK for frame version 0b10 - TODO: full enh-ack support
-                // Same as above: defer queuing until ACK phase completes.
+                // Frame data already copied above.
                 state.state = Ieee802154State::TxEnhAck;
                 *needs_next_op = false;
             } else {
-                // No ACK needed, queue and notify immediately
-                receive_done(state);
+                // No ACK needed, notify immediately (data already copied above)
                 super::rx_available();
                 *needs_next_op = true;
             }
@@ -648,10 +652,8 @@ fn isr_handle_rx_done(needs_next_op: &mut bool) {
 
 /// Handle ACK TX done in ISR - matches C driver's isr_handle_ack_tx_done
 fn isr_handle_ack_tx_done(needs_next_op: &mut bool) {
-    // Queue the received frame (deferred from isr_handle_rx_done) and notify
-    STATE.with(|state| {
-        receive_done(state);
-    });
+    // Frame was already copied to queue in isr_handle_rx_done (we must copy
+    // immediately because we only have one RX buffer). Now notify upper layer.
     super::rx_available();
     *needs_next_op = true;
 }
@@ -727,23 +729,17 @@ fn isr_handle_tx_ack_phase_rx_abort(rx_abort_reason: u32, needs_next_op: &mut bo
             || r == RxAbortReason::EdAbort as u32
             || r == RxAbortReason::EdCoexReject as u32 => {}
 
-        // TX ACK timeout or coex break while sending ACK - deliver received frame
+        // TX ACK timeout or coex break while sending ACK - notify upper layer
         r if r == RxAbortReason::TxAckTimeout as u32
             || r == RxAbortReason::TxAckCoexBreak as u32 =>
         {
-            // Frame was deferred from isr_handle_rx_done - queue it now
-            STATE.with(|state| {
-                receive_done(state);
-            });
+            // Frame was already copied in isr_handle_rx_done, just notify
             super::rx_available();
             *needs_next_op = true;
         }
-        // Enhanced ACK security error - deliver received frame
+        // Enhanced ACK security error - notify upper layer
         r if r == RxAbortReason::EnhackSecurityError as u32 => {
-            // Frame was deferred from isr_handle_rx_done - queue it now
-            STATE.with(|state| {
-                receive_done(state);
-            });
+            // Frame was already copied in isr_handle_rx_done, just notify
             super::rx_available();
             *needs_next_op = true;
         }
