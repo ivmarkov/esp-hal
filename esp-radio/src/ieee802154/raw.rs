@@ -511,7 +511,7 @@ pub(crate) fn ensure_receive_enabled() {
 fn zb_mac_handler() {
     trace!("ZB_MAC interrupt");
 
-    let mut events = events();
+    let events = events();
     let rx_abort_reason = get_rx_abort_reason();
     let tx_abort_reason = get_tx_abort_reason();
 
@@ -529,36 +529,30 @@ fn zb_mac_handler() {
 
     if events & Event::RxSfdDone != 0 {
         trace!("rx sfd done");
-        events &= !(Event::RxSfdDone as u16);
     }
 
     if events & Event::TxSfdDone != 0 {
         trace!("tx sfd done");
-        events &= !(Event::TxSfdDone as u16);
     }
 
     if events & Event::TxDone != 0 {
         trace!("tx done");
         isr_handle_tx_done(&mut needs_next_operation);
-        events &= !(Event::TxDone as u16);
     }
 
     if events & Event::RxDone != 0 {
         trace!("rx done");
         isr_handle_rx_done(&mut needs_next_operation);
-        events &= !(Event::RxDone as u16);
     }
 
     if events & Event::AckTxDone != 0 {
         trace!("AckTxDone");
         isr_handle_ack_tx_done(&mut needs_next_operation);
-        events &= !(Event::AckTxDone as u16);
     }
 
     if events & Event::AckRxDone != 0 {
         trace!("AckRxDone");
         isr_handle_ack_rx_done(&mut needs_next_operation);
-        events &= !(Event::AckRxDone as u16);
     }
 
     // Second phase RX abort processing (handles TX-ACK-state aborts)
