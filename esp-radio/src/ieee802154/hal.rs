@@ -433,6 +433,13 @@ pub(crate) fn rx_auto_ack() -> bool {
         .bit_is_set()
 }
 
+/// Check if currently receiving a frame (past SFD detection).
+/// Matches the C driver's `ieee802154_ll_is_current_rx_frame()`.
+#[inline(always)]
+pub(crate) fn is_current_rx_frame() -> bool {
+    IEEE802154::regs().rx_status().read().rx_state().bits() > 1
+}
+
 #[inline(always)]
 pub(crate) fn timer0_set_threshold(threshold: u32) {
     IEEE802154::regs()

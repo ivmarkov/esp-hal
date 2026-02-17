@@ -201,6 +201,18 @@ static mut TX_FRAME: *const u8 = core::ptr::null();
 
 pub fn ieee802154_transmit(frame: *const u8, cca: bool) -> i32 {
     STATE.with(|state| {
+        // TX deferral: don't abort in-flight frame reception or ACK transmission.
+        // Matches the C driver's ieee802154_transmit() which checks
+        // is_current_rx_frame() and TxAck/TxEnhAck state before transmitting.
+        // The caller (openthread crate) handles tx_failed as a retry signal.
+        if state.state == Ieee802154State::TxAck
+            || state.state == Ieee802154State::TxEnhAck
+            || is_current_rx_frame()
+        {
+            super::tx_failed();
+            return;
+        }
+
         unsafe { TX_FRAME = frame };
 
         tx_init(state, frame);
