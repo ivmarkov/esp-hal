@@ -118,6 +118,12 @@ impl RxAbortReason {
     pub fn bit(&self) -> u32 {
         1 << (*self as u32 - 1)
     }
+
+    /// Mask of all RX abort events (bits 0-23), matching
+    /// `IEEE802154_RX_ABORT_ALL` in the C driver.
+    pub fn all() -> u32 {
+        0x00FF_FFFF
+    }
 }
 
 impl BitOr for RxAbortReason {
@@ -223,6 +229,16 @@ pub(crate) fn enable_rx_abort_events(events: u32) {
         .modify(|r, w| unsafe {
             w.rx_abort_intr_ctrl()
                 .bits(r.rx_abort_intr_ctrl().bits() | events)
+        });
+}
+
+#[inline(always)]
+pub(crate) fn disable_rx_abort_events(events: u32) {
+    IEEE802154::regs()
+        .rx_abort_intr_ctrl()
+        .modify(|r, w| unsafe {
+            w.rx_abort_intr_ctrl()
+                .bits(r.rx_abort_intr_ctrl().bits() & !events)
         });
 }
 

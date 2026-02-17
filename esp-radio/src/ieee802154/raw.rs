@@ -35,16 +35,31 @@ const ACK_TIMEOUT_US: u32 = 200_000;
 
 static mut RX_BUFFER: [u8; FRAME_SIZE] = [0u8; FRAME_SIZE];
 
+/// Stores the last received ACK frame (populated during isr_handle_ack_rx_done
+/// and stop_rx_ack). Cleared at the start of each transmit.
+static mut ACK_FRAME: Option<RawReceived> = None;
+
+struct PendingTx {
+    frame: *const u8,
+    cca: bool,
+}
+
+// Safety: PendingTx holds a raw pointer to a caller-managed buffer that remains
+// valid for the lifetime of the pending operation (transmit_buffer in Ieee802154).
+unsafe impl Send for PendingTx {}
+
 struct IeeeState {
     state: Ieee802154State,
     rx_queue: Queue<RawReceived>,
     rx_queue_size: usize,
+    pending_tx: Option<PendingTx>,
 }
 
 static STATE: NonReentrantMutex<IeeeState> = NonReentrantMutex::new(IeeeState {
     state: Ieee802154State::Idle,
     rx_queue: Queue::new(),
     rx_queue_size: 10,
+    pending_tx: None,
 });
 
 unsafe extern "C" {
@@ -179,7 +194,9 @@ fn tx_init(state: &mut IeeeState, frame: *const u8) {
     stop_current_operation_inner(state);
 
     ieee802154_pib_update();
-    ieee802154_sec_update();
+    set_transmit_security(false);
+
+    unsafe { ACK_FRAME = None };
 
     set_tx_addr(frame);
 
@@ -202,33 +219,38 @@ static mut TX_FRAME: *const u8 = core::ptr::null();
 pub fn ieee802154_transmit(frame: *const u8, cca: bool) -> i32 {
     STATE.with(|state| {
         // TX deferral: don't abort in-flight frame reception or ACK transmission.
-        // Matches the C driver's ieee802154_transmit() which checks
-        // is_current_rx_frame() and TxAck/TxEnhAck state before transmitting.
-        // The caller (openthread crate) handles tx_failed as a retry signal.
+        // Matches the C driver's ieee802154_transmit() which defers to pending_tx.
         if state.state == Ieee802154State::TxAck
             || state.state == Ieee802154State::TxEnhAck
-            || is_current_rx_frame()
+            || (state.state == Ieee802154State::Receive && is_current_rx_frame())
         {
-            super::tx_failed();
+            // Defer: store pending TX and enable all RX abort events so we
+            // know when the current operation finishes.
+            state.pending_tx = Some(PendingTx { frame, cca });
+            enable_rx_abort_events(RxAbortReason::all());
             return;
         }
 
-        unsafe { TX_FRAME = frame };
-
-        tx_init(state, frame);
-
-        ieee802154_set_txrx_pti(Ieee802154TxRxScene::Tx);
-
-        if cca {
-            set_cmd(Command::CcaTxStart);
-            state.state = Ieee802154State::Transmit;
-        } else {
-            set_cmd(Command::TxStart);
-            state.state = Ieee802154State::Transmit;
-        }
+        state.pending_tx = None;
+        transmit_internal(state, frame, cca);
     });
 
     0 // ESP_OK
+}
+
+fn transmit_internal(state: &mut IeeeState, frame: *const u8, cca: bool) {
+    unsafe { TX_FRAME = frame };
+
+    tx_init(state, frame);
+
+    ieee802154_set_txrx_pti(Ieee802154TxRxScene::Tx);
+
+    if cca {
+        set_cmd(Command::CcaTxStart);
+    } else {
+        set_cmd(Command::TxStart);
+    }
+    state.state = Ieee802154State::Transmit;
 }
 
 pub fn ieee802154_receive() -> i32 {
@@ -249,6 +271,14 @@ pub fn ieee802154_receive() -> i32 {
 
 pub fn ieee802154_poll() -> Option<RawReceived> {
     STATE.with(|state| state.rx_queue.pop_front())
+}
+
+/// Get the ACK frame received in response to the last transmission.
+/// Returns `None` if no ACK was received (e.g., frame didn't require ACK,
+/// or ACK was not received before timeout).
+/// The C driver passes this via `esp_ieee802154_transmit_done(frame, ack, ack_info)`.
+pub fn get_ack_frame() -> Option<RawReceived> {
+    unsafe { ACK_FRAME }
 }
 
 fn rx_init(state: &mut IeeeState) {
@@ -299,7 +329,6 @@ fn stop_rx(state: &mut IeeeState) {
 
 fn stop_tx_ack(state: &mut IeeeState) {
     set_cmd(Command::Stop);
-    ieee802154_sec_update();
 
     receive_done(state);
 
@@ -308,7 +337,6 @@ fn stop_tx_ack(state: &mut IeeeState) {
 
 fn stop_tx(state: &mut IeeeState) {
     set_cmd(Command::Stop);
-    ieee802154_sec_update();
 
     let evts = events();
 
@@ -338,6 +366,13 @@ fn stop_rx_ack() {
     disable_events(Event::Timer0Overflow as u16);
 
     if evts & Event::AckRxDone != 0 {
+        // Capture the received ACK frame
+        unsafe {
+            ACK_FRAME = Some(RawReceived {
+                data: RX_BUFFER,
+                channel: freq_to_channel(freq()),
+            });
+        }
         super::tx_done();
     } else {
         super::tx_failed();
@@ -426,46 +461,33 @@ pub fn set_panid(index: u8, id: u16) {
     ieee802154_pib_set_panid(index, id);
 }
 
-/// Stop timers at the start of event processing, matching C driver's event_end_process.
-/// The C driver also clears ETM channels here, which we don't use.
+/// Stop timers and clear security at the start of event processing,
+/// matching C driver 5.5.2's event_end_process.
 #[inline(always)]
 fn event_end_process() {
+    set_transmit_security(false);
     timer0_stop();
     // timer1 is not currently used; would be stopped here if we add timed TX/RX
 }
 
-#[inline(always)]
-fn ieee802154_sec_update() {
-    let is_security = false;
-    set_transmit_security(is_security);
-    // ieee802154_sec_clr_transmit_security();
-}
-
-fn next_operation_inner(state: &mut IeeeState) -> Ieee802154State {
-    let prev_state = state.state;
-    state.state = if ieee802154_pib_get_rx_when_idle() {
+fn next_operation_inner(state: &mut IeeeState) {
+    if let Some(pending) = state.pending_tx.take() {
+        // Restore RX abort events to normal (matching C driver's next_operation)
+        disable_rx_abort_events(RxAbortReason::all());
+        enable_rx_abort_events(RxAbortReason::TxAckTimeout | RxAbortReason::TxAckCoexBreak);
+        // Clear any stale RX abort events created during deferral
+        clear_events(Event::RxAbort as u16);
+        transmit_internal(state, pending.frame, pending.cca);
+    } else if ieee802154_pib_get_rx_when_idle() {
         enable_rx();
-        Ieee802154State::Receive
+        state.state = Ieee802154State::Receive;
     } else {
-        Ieee802154State::Idle
-    };
-
-    prev_state
-}
-
-fn notify_state(state: Ieee802154State) {
-    match state {
-        Ieee802154State::Receive => super::rx_available(),
-        Ieee802154State::Transmit | Ieee802154State::RxAck => super::tx_done(),
-        Ieee802154State::TxAck | Ieee802154State::TxEnhAck => super::tx_done(),
-        _ => (),
+        state.state = Ieee802154State::Idle;
     }
 }
 
 fn next_operation() {
-    let previous_operation = STATE.with(next_operation_inner);
-
-    notify_state(previous_operation)
+    STATE.with(next_operation_inner);
 }
 
 // FIXME: we shouldn't need this - we need to re-align the original driver with our port
@@ -557,7 +579,6 @@ fn zb_mac_handler() {
 
 /// Handle TX done in ISR - matches C driver's isr_handle_tx_done
 fn isr_handle_tx_done(needs_next_op: &mut bool) {
-    ieee802154_sec_update();
     event_end_process();
 
     STATE.with(|state| {
@@ -619,8 +640,6 @@ fn isr_handle_rx_done(needs_next_op: &mut bool) {
 
 /// Handle ACK TX done in ISR - matches C driver's isr_handle_ack_tx_done
 fn isr_handle_ack_tx_done(needs_next_op: &mut bool) {
-    ieee802154_sec_update();
-
     // Notify that the received frame (which triggered the ACK) is available
     super::rx_available();
     *needs_next_op = true;
@@ -630,6 +649,13 @@ fn isr_handle_ack_tx_done(needs_next_op: &mut bool) {
 fn isr_handle_ack_rx_done(needs_next_op: &mut bool) {
     timer0_stop();
     disable_events(Event::Timer0Overflow as u16);
+    // Capture the received ACK frame before RX buffer is reused
+    unsafe {
+        ACK_FRAME = Some(RawReceived {
+            data: RX_BUFFER,
+            channel: freq_to_channel(freq()),
+        });
+    }
     // ACK received for our transmitted frame
     super::tx_done();
     *needs_next_op = true;
@@ -672,7 +698,6 @@ fn isr_handle_rx_phase_rx_abort(rx_abort_reason: u32, needs_next_op: &mut bool) 
 /// Second phase RX abort - handles aborts while in TX_ACK state
 /// Matches C driver's isr_handle_tx_ack_phase_rx_abort
 fn isr_handle_tx_ack_phase_rx_abort(rx_abort_reason: u32, needs_next_op: &mut bool) {
-    ieee802154_sec_update();
     event_end_process();
 
     match rx_abort_reason {
@@ -724,7 +749,6 @@ fn isr_handle_timer0_done(needs_next_op: &mut bool) {
 
 /// Handle TX abort - matches C driver's isr_handle_tx_abort
 fn isr_handle_tx_abort(tx_abort_reason: u32, needs_next_op: &mut bool) {
-    ieee802154_sec_update();
     event_end_process();
 
     match tx_abort_reason {

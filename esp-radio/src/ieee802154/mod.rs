@@ -168,6 +168,21 @@ impl<'a> Ieee802154<'a> {
         ieee802154_poll()
     }
 
+    /// Get the ACK frame received in response to the last transmission.
+    ///
+    /// When a transmitted frame requires acknowledgment, the peer sends back
+    /// an ACK frame. This method returns that ACK frame data, which includes
+    /// the Frame Pending bit and other information needed by upper layers
+    /// like OpenThread.
+    ///
+    /// Returns `None` if no ACK was received (frame didn't require ACK,
+    /// ACK timed out, or no transmission has occurred).
+    ///
+    /// The ACK frame is cleared at the start of each new transmission.
+    pub fn get_ack_frame(&self) -> Option<RawReceived> {
+        raw::get_ack_frame()
+    }
+
     /// Get a received frame, if available
     pub fn received(&mut self) -> Option<Result<ReceivedFrame, Error>> {
         raw::ensure_receive_enabled();
