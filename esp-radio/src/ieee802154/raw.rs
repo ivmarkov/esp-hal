@@ -217,8 +217,16 @@ pub(crate) fn set_queue_size(rx_queue_size: usize) {
 /// Pointer to the current TX frame (stored for ACK handling)
 static mut TX_FRAME: *const u8 = core::ptr::null();
 
-pub fn ieee802154_transmit(frame: *const u8, cca: bool) -> i32 {
+pub fn ieee802154_transmit(frame: *const u8, cca: bool) -> bool {
     STATE.with(|state| {
+        // Reject if a deferred transmission is already pending. This prevents
+        // silent data loss (overwriting the pending frame) and data corruption
+        // (the pending_tx raw pointer would alias the same transmit_buffer
+        // that the new call is about to overwrite).
+        if state.pending_tx.is_some() {
+            return false;
+        }
+
         // TX deferral: don't abort in-flight frame reception or ACK transmission.
         // Matches the C driver's ieee802154_transmit() which defers to pending_tx.
         if state.state == Ieee802154State::TxAck
@@ -229,14 +237,13 @@ pub fn ieee802154_transmit(frame: *const u8, cca: bool) -> i32 {
             // know when the current operation finishes.
             state.pending_tx = Some(PendingTx { frame, cca });
             enable_rx_abort_events(RxAbortReason::all());
-            return;
+            return true;
         }
 
         state.pending_tx = None;
         transmit_internal(state, frame, cca);
-    });
-
-    0 // ESP_OK
+        true
+    })
 }
 
 fn transmit_internal(state: &mut IeeeState, frame: *const u8, cca: bool) {
