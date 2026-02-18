@@ -47,10 +47,6 @@ pub enum Error {
 
     /// The requested data content is invalid.
     BadInput,
-
-    /// A transmission is already pending. The caller should wait for the
-    /// previous transmission to complete before retrying.
-    TxPending,
 }
 
 impl core::error::Error for Error {}
@@ -250,9 +246,7 @@ impl<'a> Ieee802154<'a> {
             .unwrap();
         self.transmit_buffer[0] = (offset - 1) as u8;
 
-        if !ieee802154_transmit(self.transmit_buffer.as_ptr(), cca) {
-            return Err(Error::TxPending);
-        }
+        ieee802154_transmit(self.transmit_buffer.as_ptr(), cca);
 
         Ok(())
     }
@@ -265,9 +259,7 @@ impl<'a> Ieee802154<'a> {
         self.transmit_buffer[1..][..frame.len()].copy_from_slice(frame);
         self.transmit_buffer[0] = frame.len() as u8;
 
-        if !ieee802154_transmit(self.transmit_buffer.as_ptr(), cca) {
-            return Err(Error::TxPending);
-        }
+        ieee802154_transmit(self.transmit_buffer.as_ptr(), cca);
 
         Ok(())
     }
